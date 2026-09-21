@@ -1,0 +1,4 @@
+# 既存Picoのconfig.pyはそのまま使用します。このファイルは自動転送されません。
+WIFI_SSID = 'YOUR_WIFI_SSID'
+WIFI_PASSWORD = 'YOUR_WIFI_PASSWORD'
+DISCORD_WEBHOOK_URL = 'YOUR_DISCORD_WEBHOOK_URL'
