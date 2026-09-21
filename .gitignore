@@ -8,3 +8,6 @@ config.py
 firmware/config.py
 .env
 .env.*
+credentials/
+data/
+.venv*/

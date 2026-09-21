@@ -64,7 +64,7 @@ def application():
         'os':types.SimpleNamespace(stat=os.stat, remove=os.remove, rename=os.rename, sync=lambda:None), 'VERSION':'test', 'INTERVAL_S':300, 'WIFI_TIMEOUT_MS':30000,
         'HTTP_TIMEOUT_S':5, 'LOG_LIMIT':4096, 'LOG_INTERVAL_MS':1800000,
         '_last_log':{}, 'LOG_PATH':'health.log', 'clock_synced':False,
-        'bmp':None, 'prev_pressure':None}
+        'bmp':None, 'prev_pressure':None, 'dashboard':None, 'history':None, 'last_measurement':{}}
     ns['network']=types.SimpleNamespace(WLAN=lambda _:ns['wlan'], STA_IF=0)
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'device_main','exec'),ns)
     return ns
@@ -75,6 +75,15 @@ class ReliabilityTests(unittest.TestCase):
         self.sink=contextlib.redirect_stdout(io.StringIO());self.sink.__enter__()
     def tearDown(self):
         self.sink.__exit__(None,None,None);os.chdir(self.cwd);self.tmp.cleanup()
+    def test_bot_invalid_clock_does_not_publish_or_store(self):
+        ns = application()
+        ns['dashboard'] = object()
+        calls = []
+        ns['history'] = types.SimpleNamespace(append=lambda *a: calls.append(a))
+        ns['connect_wifi'] = lambda: self.fail('invalid clock must not publish')
+        self.assertFalse(ns['send_report']('reading'))
+        self.assertEqual(calls, [])
+
     def test_bmp_temperature_and_pressure_waits_survive_wrap(self):
         cls=next(n for n in ast.parse((ROOT/'libs/bmp180.py').read_text()).body if isinstance(n,ast.ClassDef))
         fn=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='makegauge')
@@ -158,6 +167,27 @@ class ReliabilityTests(unittest.TestCase):
         for _ in range(300):
             ns['time'].now+=1800001;ns['log_event']('http',503)
         self.assertLessEqual(sum(p.stat().st_size for p in pathlib.Path('.').glob('health.log*')),8192)
+    def test_offline_bot_still_records_measurement(self):
+        ns=application();records=[]
+        ns['dashboard']=object()
+        ns['history']=types.SimpleNamespace(append=lambda *args:records.append(args))
+        ns['last_measurement']={'temperature':25,'humidity':58}
+        ns['time'].now=1789990000*1000
+        ns['connect_wifi']=lambda:False
+        ns['log_event']=lambda *a:None
+        self.assertFalse(ns['send_report']('reading'))
+        self.assertEqual(len(records),1)
+
+    def test_sensor_failure_clears_previous_graph_readings(self):
+        ns=application();ns['last_measurement']={'temperature':25,'humidity':58}
+        def fail():raise OSError(5)
+        ns['dht11']=types.SimpleNamespace(measure=fail)
+        ns['BMP180']=lambda bus:types.SimpleNamespace(blocking_read=fail)
+        ns['i2c']=object()
+        ns['collect_message']()
+        self.assertIsNone(ns['last_measurement'].get('temperature'))
+        self.assertIsNone(ns['last_measurement'].get('humidity'))
+
     def test_sensor_failure_does_not_stop_other_measurements(self):
         ns=application();self.assertIn('collect_message',ns)
         def fail():raise OSError(5)

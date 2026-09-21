@@ -12,7 +12,7 @@ import os
 from libs.bmp180 import BMP180
 import config
 
-VERSION = '2026-09-21.1'
+VERSION = '2026-09-21.3'
 INTERVAL_S = 300
 WIFI_TIMEOUT_MS = 30000
 HTTP_TIMEOUT_S = 5
@@ -24,6 +24,9 @@ wdt = None
 bmp = None
 prev_pressure = None
 clock_synced = False
+dashboard = None
+history = None
+last_measurement = {}
 
 
 def feed():
@@ -156,11 +159,14 @@ def now_jst():
 
 
 def collect_message():
-    global bmp, prev_pressure
+    global bmp, prev_pressure, last_measurement
+    last_measurement = {'temperature': None, 'humidity': None}
     lines = [now_jst()]
     feed()
     try:
         dht11.measure()
+        last_measurement['temperature'] = dht11.temperature()
+        last_measurement['humidity'] = dht11.humidity()
         lines.append('🌡 DHT11温度: {}°C  💧 湿度: {}%'.format(
             dht11.temperature(), dht11.humidity()))
     except Exception as exc:
@@ -187,8 +193,40 @@ def collect_message():
     return '\n'.join(lines)
 
 
+def send_report(message, connected=None):
+    if dashboard is None:
+        return send_to_discord(message)
+    led.off()
+    try:
+        now = int(time.time())
+        if now < 1704067200:
+            log_event('clock_wait')
+            return False
+        history.append(now, last_measurement.get('temperature'), last_measurement.get('humidity'))
+        if connected is None:
+            connected = connect_wifi()
+        if not connected:
+            return False
+        import pico_chart
+        feed()
+        pico_chart.render(history, now, feed=feed)
+        gc.collect()
+        print('CHART_READY', os.stat('climate.png')[6], 'free', gc.mem_free())
+        ok = dashboard.update(message, 'climate.png')
+        if not ok:
+            log_event('bot_http_error')
+        return ok
+    except Exception as exc:
+        log_event('bot_error', error_code(exc))
+        return False
+    finally:
+        led.on()
+        gc.collect()
+        feed()
+
+
 def main():
-    global wdt, led, wlan, dht11, i2c
+    global wdt, led, wlan, dht11, i2c, dashboard, history
     # A short maintenance window allows USB recovery before enabling the WDT.
     print('START', VERSION, 'reset', machine.reset_cause())
     time.sleep_ms(3000)
@@ -198,6 +236,13 @@ def main():
     wlan = network.WLAN(network.STA_IF)
     dht11 = dht.DHT11(Pin(13))
     i2c = I2C(1, sda=Pin(14), scl=Pin(15), freq=100000)
+    if getattr(config, 'BOT_TOKEN', None) and getattr(config, 'BOT_CHANNEL_ID', None):
+        from pico_discord import Dashboard
+        from pico_history import RingHistory
+        dashboard = Dashboard(config.BOT_TOKEN, config.BOT_CHANNEL_ID,
+                              config.BOT_APPLICATION_ID, feed=feed)
+        history = RingHistory(feed=feed)
+        print('MODE single-message-bot')
     log_event('boot', machine.reset_cause())
     # Back off after a hard hang; avoid rapid reboot/write loops during outages.
     skip_ntp = machine.reset_cause() == machine.WDT_RESET
@@ -206,15 +251,13 @@ def main():
     failures = 0
     while True:
         try:
-            if not connect_wifi():
-                sleep_safe(30)
-                continue
-            if not clock_synced and not skip_ntp:
+            connected = connect_wifi()
+            if connected and not clock_synced and (not skip_ntp or dashboard is not None):
                 sync_clock()
             skip_ntp = False
             message = collect_message()
             print(message)
-            if send_to_discord(message):
+            if send_report(message, connected):
                 failures = 0
             else:
                 failures += 1
@@ -224,7 +267,7 @@ def main():
                     failures = 0
             gc.collect()
             print('CYCLE_DONE', time.ticks_ms(), 'free', gc.mem_free())
-            sleep_safe(INTERVAL_S)
+            sleep_safe(max(INTERVAL_S, dashboard.retry_after if dashboard is not None else 0))
         except Exception as exc:
             log_event('loop_error', error_code(exc))
             gc.collect()
