@@ -11,3 +11,8 @@ firmware/config.py
 credentials/
 data/
 .venv*/
+.ruff_cache/
+climate.bin
+climate.png
+discord_state.json
+health.log*

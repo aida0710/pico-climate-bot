@@ -1,101 +1,141 @@
-# Pico W 温湿度・気圧通知
+# pico-climate-bot
 
-Raspberry Pi Pico W上のMicroPythonコードをMacで編集し、テストしてUSBで反映するプロジェクトです。DHT11（温湿度）とBMP180（温度・気圧）を読み、約5分ごとにDiscordの `bot` チャンネルの同じ投稿を更新します。直近7日間の温湿度グラフもPico内で生成し、画像を差し替えます。Macや別サーバーの常時稼働は不要です。
+[![Tests](https://github.com/aida0710/pico-climate-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/aida0710/pico-climate-bot/actions/workflows/tests.yml)
 
-Python 3.9以降とGitを使用します。追加パッケージのインストールは不要です。USB操作はmacOS向けです。現在の対象は **Raspberry Pi Pico W / RP2040、MicroPython v1.27.0** です。
+**Raspberry Pi Pico Wだけで動く、Discord向けの室内環境モニター。**
 
-## 編集から反映まで
+DHT11で温湿度、BMP180で温度・気圧を測定し、約5分ごとにDiscordの同じメッセージを更新します。直近7日間の温湿度グラフもPico内で生成します。PCや別サーバーの常時稼働、外部の画像生成サービスは不要です。
+
+```mermaid
+flowchart LR
+    DHT[DHT11 / 温湿度] --> Pico[Pico W / MicroPython]
+    BMP[BMP180 / 温度・気圧] --> Pico
+    Pico --> History[7日間の循環履歴]
+    History --> PNG[PNGグラフ生成]
+    PNG --> Discord[Discord / 同じ投稿を編集]
+    Pico --> Discord
+```
+
+## できること
+
+- 最新の温湿度・気圧を表示し、480×272の温湿度グラフを差し替え。
+- 最大2016件の履歴と投稿IDを本体に保存。再起動後も同じ投稿を更新。
+- 時刻を確認できた後は、通信断中も測定履歴を保存。
+- HTTPタイムアウト、Wi-Fi再接続、ウォッチドッグによる停止からの復旧。
+- Macからテスト・バックアップ・USB転送・転送後の照合。
+
+Discord REST APIを呼び出す投稿専用Botです。`discord.py`、Gateway接続、チャット受信・コマンド操作は使用しません。グラフは記録開始以降の実測値だけを表示し、未取得期間は空白になります。
+
+## 機材と対応環境
+
+| 項目 | 検証した構成 |
+| --- | --- |
+| ボード | Raspberry Pi Pico W / RP2040 |
+| 本体 | MicroPython v1.27.0 |
+| センサー | DHT11、BMP180（I²Cアドレス `0x77`） |
+| 開発・USB転送 | macOS、Python 3.9以降、Git |
+| ローカルテスト | Python標準ライブラリのみ |
+
+USB転送ツールはmacOS向けです。Windows・LinuxのUSB転送、Pico 2 W、別のセンサーは未検証です。本体には `dht`、`framebuf`、`ntptime`、`urequests` が必要です。
+
+### 配線
+
+| センサーの信号 | Pico側のGPIO |
+| --- | --- |
+| DHT11 DATA | GP13 |
+| BMP180 SDA | GP14 |
+| BMP180 SCL | GP15 |
+
+GPIO番号は物理ピン番号とは異なります。電源・GNDは使用するセンサーモジュールの仕様に従い、GPIO信号は3.3 Vに合わせてください。ピン指定は `firmware/main.py` にあります。
+
+## はじめる
+
+### 1. コードを取得・テスト
 
 ```sh
-cd ~/projects/codex/pico-sensor
+git clone https://github.com/aida0710/pico-climate-bot.git
+cd pico-climate-bot
 python3 pico.py test
+```
+
+追加パッケージのインストールは不要です。このテストはPicoへの接続やDiscordへの送信を行いません。
+
+### 2. Discord Botを用意
+
+[Discord Developer Portal](https://discord.com/developers/applications)でBotを作り、使用するサーバーへ招待します。対象のテキストチャンネルで、チャンネル閲覧・メッセージ履歴参照・メッセージ送信・埋め込みリンク・ファイル添付を許可してください。
+
+Botトークン、Application ID、投稿先Channel IDを控えます。Botトークンは公開キーとは別の値です。Message Contentなどの特権Intentは不要です。
+
+### 3. Picoに設定を保存
+
+MicroPythonを導入済みのPicoへ、`config.example.py` を元にした `config.py` を保存します。Thonnyなどのファイル転送機能を使用し、本体のルートに置いてください。
+
+```python
+WIFI_SSID = 'YOUR_WIFI_SSID'
+WIFI_PASSWORD = 'YOUR_WIFI_PASSWORD'
+BOT_TOKEN = 'YOUR_BOT_TOKEN'
+BOT_CHANNEL_ID = 'YOUR_CHANNEL_ID'
+BOT_APPLICATION_ID = 'YOUR_APPLICATION_ID'
+```
+
+初期ファームウェアの書き込みは[MicroPythonの導入手順](https://docs.micropython.org/en/v1.27.0/rp2/tutorial/intro.html)を参照してください。このリポジトリの転送ツールはMicroPython自体を書き換えません。
+
+実際の `config.py` はGitに追加しないでください。通常のdeployは本体の既存設定を保持します。誤転送防止のため `firmware/config.py` があるとdeployは停止します。
+
+### 4. 本体へ転送
+
+Thonnyなど他のシリアル接続を終了し、PicoをUSB接続して実行します。
+
+```sh
 python3 pico.py ports
 python3 pico.py deploy
 ```
 
-1. `firmware/main.py` を編集します。送信間隔は `INTERVAL_S`、本文は `collect_message()` にあります。
-2. `python3 pico.py test` でテストします。このコマンドは本体を操作しません。
-3. PicoをUSB接続し、`python3 pico.py deploy` で反映します。deploy自体も転送前にテストを実行します。
-
-複数のUSB機器がある場合はポートを指定してください。
+複数台ある場合は、`ports` に表示されたポートを指定します。
 
 ```sh
-python3 pico.py deploy --port /dev/cu.usbmodem314401
+python3 pico.py deploy --port /dev/cu.usbmodemXXXX
 ```
 
-ポート名は接続状況により変わります。Thonnyなど別のシリアル接続アプリは終了してから操作してください。
+転送前にテストとバックアップを行い、転送内容を照合して再起動します。起動後、Wi-Fi接続と時刻同期に成功すると最初の投稿が作られ、以降は同じ投稿を編集します。ツールによる再起動後は通常1分強の待機があります。
 
-**deploy / backup / restore は測定プログラムを一時中断し、終了時に本体を再起動します。** この機体ではツールからの再起動もウォッチドッグ由来の起動理由として扱われるため、再起動後の送信開始まで通常1分強かかります。BotモードではNTPで時刻を確認してから送信し、その後は5分待機します。USB操作中はウォッチドッグを通知し続けます。別のシリアルツールでCtrl-Cを送るだけだと、約8秒で再起動することがあります。
+既存のPicoへBot設定だけを導入する方法は[運用手順](docs/operations.md)にあります。
 
-## バックアップと復元
+## コード構成
 
-```sh
-python3 pico.py backup
-python3 pico.py restore backups/表示されたディレクトリ名
-```
+| パス | 役割 |
+| --- | --- |
+| `firmware/main.py` | 測定ループ、時刻同期、Wi-Fi接続、停止対策 |
+| `firmware/pico_discord.py` | Bot認証、初回投稿・編集、PNGの分割送信 |
+| `firmware/pico_history.py` | CRC付き固定長の循環履歴 |
+| `firmware/pico_chart.py` | MicroPython上のPNG生成 |
+| `firmware/libs/bmp180.py` | BMP180ドライバー |
+| `pico.py`、`tools/` | テスト・USB転送・バックアップ |
+| `tests/` | ハードウェア不要の回帰テスト |
 
-反映前には、対象の本体ファイルと `config.py` を `backups/日時/` に自動保存します。ファイルは所有者のみ読み書きできる権限にし、Git管理から除外します。変更のないファイルは書き込みません。
+測定間隔は `INTERVAL_S`、メッセージ本文は `collect_message()` で変更できます。表示時刻はJSTです。開発中の作業方法は[CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 
-転送は `.new` へ書き込み、内容とMicroPythonでの構文を検証してから置換します。`main.py` は最後に置換します。失敗時は元のファイルへ戻して照合します。USB切断や電源断で本体と通信できない場合、自動復元は保証できません。表示されたバックアップを保持して再接続してください。
+## データと動作の制約
 
-`restore` はバックアップのハッシュを確認し、**その時点の管理対象プログラム**を復元します。現在の状態も先にバックアップします。バックアップ後に別途追加したファイルや、`config.py` は変更しません。復元する古いコードが現在のテストを満たすとは限りません。
+| 本体内のファイル | 内容 |
+| --- | --- |
+| `climate.bin` | 最大2016件・24,192バイトの循環履歴 |
+| `climate.png` | 約67 KBのグラフ。約65 KBの描画バッファで生成 |
+| `discord_state.json` | 投稿IDと初回作成の試行状態 |
+| `health.log`、`health.log.1` | 各4 KiB以下の稼働・エラーログ |
 
-## 設定とファイル
+画像は1 KBずつ送信し、API応答の読み込みは16 KiBまでに制限します。グラフは温度・湿度の別パネルで、15分を超える欠測区間の線をつなぎません。気圧は本文のみです。
 
-| ファイル | 用途 |
-|---|---|
-| `firmware/main.py` | Wi-Fi、測定、Discord送信、復旧処理 |
-| `firmware/pico_discord.py` | Bot認証、初回投稿・同一メッセージ編集、PNG分割送信 |
-| `firmware/pico_history.py` | CRC付き固定長の7日間履歴 |
-| `firmware/pico_chart.py` | Pico内で480×272 PNG生成 |
-| `firmware/libs/bmp180.py` | 気圧センサードライバー |
-| `tests/` | ローカル回帰テスト |
-| `pico.py` | 操作用CLI |
-| `tools/` | USB転送、バックアップ、復元 |
-| `config.example.py` | 設定項目の例。自動転送しない |
-| `backups/` | 秘密情報を含むローカルバックアップ。Git対象外 |
+時計が初期値のままNTPに接続できない場合は、履歴保存・投稿を保留します。初回投稿の応答を失った場合は最近10件から自分の投稿を探し、特定できなければ重複作成を避けて停止します。投稿の手動削除による404でも、自動で新規投稿しません。
 
-Wi-Fi・Webhook・Botの設定は **Pico内の `config.py`** を使います。通常のdeployで上書きしません。`firmware/config.py` が存在すると誤転送を避けるため停止します。新しいPicoへの初期セットアップやファームウェア更新は、このツールの対象外です。
+**通常のdeployは履歴・画像・投稿IDを変更しません。ただし、それらはプログラムの自動バックアップ対象には含まれません。**
 
-## 長期稼働への対策と検証範囲
+## 検証範囲
 
-- 時間カウンターの差は `ticks_diff()` で計算。
-- Wi-Fi接続待ちは最大30秒。切断時は再接続してから送信。
-- HTTPタイムアウトは5秒。応答を必ず閉じ、巨大なエラー本文を読み込まない。
-- センサー異常はその周期の警告とし、次の周期で再初期化。
-- 8秒のウォッチドッグで処理停止から再起動。通常の5分待機中は通知を継続。
-- ウォッチドッグ再起動後は60秒待機。BotモードはNTP同期を試み、時計が初期値の場合は投稿せず次周期で再試行。
-- 本体の `health.log` / `health.log.1` にエラー・起動理由を保存。各4 KiB以下、同種イベントの保存は原則30分に1回。秘密情報を含む例外文字列は保存しない。
+2026-09-21の実機検証で、PNG生成、Discordへの投稿、再起動後の同一投稿編集、通常5分周期での画像差し替えを確認しました。PNG生成は約1.2秒で、連続する2周期の終了時の空きヒープはともに179,072バイトでした。
 
-2026-09-21の実機検証では、Wi-Fi再接続、HTTP応答停止時のタイムアウト、NTP失敗、センサー復旧、カウンター一周の模擬試験、通信停止からのウォッチドッグ再起動、復旧直後と5分後のHTTP 204を確認しました。数ヶ月の連続運転は未検証です。
+Wi-Fi再接続、HTTPタイムアウト、ウォッチドッグ復旧も検証しました。数ヶ月の連続運転は未検証です。過去の停止時のログがないため元の停止原因は断定せず、待機時間・切断復旧・時間カウンターの周回など、コードで確認できた停止要因を対策しています。
 
-ネットワークのDNS/TLS処理が停止する場合は、ウォッチドッグで復旧を試みます。このプロジェクトはMicroPython本体の更新を行いません。
+## ライセンスとクレジット
 
-## Git
-
-```sh
-git diff
-python3 pico.py test
-git add firmware tests tools pico.py README.md
-git commit -m "Describe the change"
-```
-
-GitへのコミットとPicoへの反映は別の操作です。GitHubへの公開・pushは設定していません。
-
-## Bot設定とデータ
-
-`credentials/bot.json` に `bot_token`、`channel_id`、`application_id` を保存し、権限を0600にして `python3 -m tools.configure_bot` を実行します。既存Wi-Fi設定を保持したまま、バックアップ・テスト・転送・照合を行います。秘密情報はGit対象外です。通常のコード変更には `python3 pico.py deploy` を使います。
-
-Bot設定がある場合は旧Webhookへの投稿を停止し、Discord REST APIを直接呼びます。受信コマンドやGateway接続は使いません。Botには対象チャンネルの閲覧・履歴参照・メッセージ送信・埋め込み・ファイル添付の権限が必要です。
-
-- `discord_state.json`: 投稿IDを保存し、再起動後も同じ投稿を編集します。削除すると重複防止状態が失われるため保持してください。初回投稿の応答喪失時は最近10件から自分の投稿を探し、解決できない場合は追加投稿せず停止します。手動削除による404も自動で再投稿しません。
-- `climate.bin`: 最大2016件・24,192バイトの循環履歴。時刻確認後は通信断中も測定値を記録します。時計が初期値の場合は時刻付き履歴を作れません。記録開始前のデータは空白です。
-- `climate.png`: 約67 KBの画像。温度・湿度を別パネルで表示し、15分を超える欠測は線をつなぎません。PNGは約65 KBの描画バッファで作り、1 KBずつ送信します。外部画像生成サービスは使いません。
-
-これらの実行時データは通常のdeployで変更しません。プログラムの自動バックアップには履歴・画像・投稿IDは含まれません。API応答の読み込みは16 KBまでに制限し、レート制限時は待機時間を延ばします。
-
-## 今回の実機検証（2026-09-21）
-
-51件の自動テスト成功。MicroPython v1.27.0でPNG生成は約1.2秒、画像は67,008バイト。実際のDiscord画像を取得し480×272の温湿度グラフを目視確認しました。再起動後にNTP同期し、保存済みの同じ投稿IDへHTTP 200 PATCHで更新できています。23:52と23:57の通常5分周期でHTTP 200 PATCHを確認し、Discord側も投稿が1件・同じID・編集日時と画像URLが更新されたことを照合しました。両周期終了時の空きヒープは179,072バイトで一致しました。
-
-数ヶ月の連続運転や、長時間停電・インターネット遮断からのあらゆる回復は未検証です。初期時計のままNTPに接続できない場合は投稿を保留します。停止直前のログが残っていないため、過去の停止原因は断定できません。待機無制限・通信切断後の復旧不足・カウンター周回を含む停止要因に対策しています。
+BMP180ドライバーにはSebastian Plamauer氏によるMITライセンスのコードが含まれます。著作権・ライセンス表記は[ドライバー冒頭](firmware/libs/bmp180.py)に保持しています。

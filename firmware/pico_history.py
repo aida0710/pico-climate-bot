@@ -16,14 +16,20 @@ _WEEK = 7 * 86400
 
 
 def _valid_epoch(value):
-    return (isinstance(value, int) and not isinstance(value, bool)
-            and _MIN_EPOCH <= value <= 0xffffffff)
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and _MIN_EPOCH <= value <= 0xFFFFFFFF
+    )
 
 
 def _measurement(value, lower, upper):
     # Ordered comparisons also reject NaN and infinities without importing math.
-    if (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and lower <= value <= upper):
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and lower <= value <= upper
+    ):
         return int(round(value * 10))
     return _MISSING
 
@@ -31,11 +37,13 @@ def _measurement(value, lower, upper):
 def _decode(data):
     if len(data) != _RECORD_SIZE:
         return None
-    epoch, temp, humidity, crc = struct.unpack('<IhhI', data)
-    if ((binascii.crc32(data[:8]) & 0xffffffff) != crc
-            or not _valid_epoch(epoch)
-            or (temp != _MISSING and not -400 <= temp <= 850)
-            or (humidity != _MISSING and not 0 <= humidity <= 1000)):
+    epoch, temp, humidity, crc = struct.unpack("<IhhI", data)
+    if (
+        (binascii.crc32(data[:8]) & 0xFFFFFFFF) != crc
+        or not _valid_epoch(epoch)
+        or (temp != _MISSING and not -400 <= temp <= 850)
+        or (humidity != _MISSING and not 0 <= humidity <= 1000)
+    ):
         return None
     return epoch, temp, humidity
 
@@ -48,27 +56,30 @@ class RingHistory:
     Existing oversized files are rejected rather than silently discarded.
     """
 
-    def __init__(self, path='climate.bin', capacity=2016, feed=lambda: None):
-        if (not isinstance(capacity, int) or isinstance(capacity, bool)
-                or not 1 <= capacity <= 2048):
-            raise ValueError('history capacity must be 1..2048 records')
+    def __init__(self, path="climate.bin", capacity=2016, feed=lambda: None):
+        if (
+            not isinstance(capacity, int)
+            or isinstance(capacity, bool)
+            or not 1 <= capacity <= 2048
+        ):
+            raise ValueError("history capacity must be 1..2048 records")
         self.path = path
         self.capacity = capacity
         self.feed = feed
         self._next = 0
         self._latest = 0
         try:
-            stream = open(path, 'rb')
+            stream = open(path, "rb")
         except OSError as exc:
             if exc.args[0] != 2:  # ENOENT; do not replace unreadable files.
                 raise
-            with open(path, 'wb'):
+            with open(path, "wb"):
                 pass
             return
         with stream:
             stream.seek(0, 2)
             if stream.tell() > capacity * _RECORD_SIZE:
-                raise ValueError('history file exceeds configured capacity')
+                raise ValueError("history file exceeds configured capacity")
             stream.seek(0)
             for index in range(capacity):
                 if index % 64 == 0:
@@ -85,16 +96,17 @@ class RingHistory:
         """Persist a sample, returning False for invalid/non-increasing time."""
         if not _valid_epoch(now) or now <= self._latest:
             return False
-        payload = struct.pack('<Ihh', now, _measurement(temp, -40, 85),
-                              _measurement(humidity, 0, 100))
-        data = payload + struct.pack('<I', binascii.crc32(payload) & 0xffffffff)
+        payload = struct.pack(
+            "<Ihh", now, _measurement(temp, -40, 85), _measurement(humidity, 0, 100)
+        )
+        data = payload + struct.pack("<I", binascii.crc32(payload) & 0xFFFFFFFF)
         self.feed()
-        with open(self.path, 'r+b') as stream:
+        with open(self.path, "r+b") as stream:
             stream.seek(self._next * _RECORD_SIZE)
             if stream.write(data) != _RECORD_SIZE:
-                raise OSError('short history write')
+                raise OSError("short history write")
             stream.flush()
-        sync = getattr(os, 'sync', None)
+        sync = getattr(os, "sync", None)
         if sync is not None:
             sync()
         self._latest = now
@@ -107,7 +119,7 @@ class RingHistory:
             return
         cutoff = now - _WEEK
         previous = 0
-        with open(self.path, 'rb') as stream:
+        with open(self.path, "rb") as stream:
             for offset in range(self.capacity):
                 if offset % 64 == 0:
                     self.feed()
@@ -119,5 +131,8 @@ class RingHistory:
                 epoch, temp, humidity = row
                 previous = epoch
                 if cutoff <= epoch <= now:
-                    yield (epoch, None if temp == _MISSING else temp / 10,
-                           None if humidity == _MISSING else humidity / 10)
+                    yield (
+                        epoch,
+                        None if temp == _MISSING else temp / 10,
+                        None if humidity == _MISSING else humidity / 10,
+                    )
