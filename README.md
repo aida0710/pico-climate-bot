@@ -16,6 +16,9 @@ flowchart LR
     Pico --> Discord
 ```
 
+<img width="526" height="483" alt="image" src="https://github.com/user-attachments/assets/a00e1dab-2e99-436f-9b40-44f11c769f16" />
+
+
 ## できること
 
 - 最新の温湿度・気圧を表示し、480×272の温湿度グラフを差し替え。
