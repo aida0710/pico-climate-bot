@@ -81,4 +81,6 @@ BOT_APPLICATION_ID = 'YOUR_APPLICATION_ID'
 
 ## ライセンスとクレジット
 
+本プロジェクトは[MITライセンス](LICENSE)で公開しています。
+
 BMP180ドライバーにはSebastian Plamauer氏によるMITライセンスのコードが含まれます。著作権・ライセンス表記は[ドライバー冒頭](firmware/libs/bmp180.py)に保持しています。
